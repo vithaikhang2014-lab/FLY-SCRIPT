@@ -1,0 +1,101 @@
+--[ FLY SCRIPT - SMOOTH & LITE ]--
+local plr = game.Players.LocalPlayer
+local chr = plr.Character or plr.CharacterAdded:Wait()
+local hum = chr:WaitForChild("Humanoid")
+local root = chr:WaitForChild("HumanoidRootPart")
+
+-- Tạo BodyVelocity để bay mượt
+local bv = Instance.new("BodyVelocity")
+bv.MaxForce = Vector3.new(1, 1, 1) * 1e5
+bv.P = 1e4
+
+-- Tạo BodyGyro để giữ thăng bằng
+local bg = Instance.new("BodyGyro")
+bg.MaxTorque = Vector3.new(1, 1, 1) * 1e6
+bg.P = 1e5
+
+-- Biến điều khiển
+local flying = false
+local speed = 50
+local hold = false
+
+-- Hàm bật/tắt bay
+function setFly(state)
+    flying = state
+    if flying then
+        hum.PlatformStand = true
+        bv.Parent = root
+        bg.Parent = root
+    else
+        hum.PlatformStand = false
+        bv:Destroy()
+        bg:Destroy()
+    end
+end
+
+-- Điều khiển bằng chuột + WASD
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local moveDirection = Vector3.new(0,0,0)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == Enum.KeyCode.Space and not flying then
+        setFly(true)
+    elseif input.KeyCode == Enum.KeyCode.Space and flying then
+        setFly(false)
+    end
+    if flying then
+        local key = input.KeyCode
+        if key == Enum.KeyCode.W then moveDirection = moveDirection + Vector3.new(0,0,-1) end
+        if key == Enum.KeyCode.S then moveDirection = moveDirection + Vector3.new(0,0,1) end
+        if key == Enum.KeyCode.A then moveDirection = moveDirection + Vector3.new(-1,0,0) end
+        if key == Enum.KeyCode.D then moveDirection = moveDirection + Vector3.new(1,0,0) end
+        if key == Enum.KeyCode.LeftShift then hold = true end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if flying then
+        local key = input.KeyCode
+        if key == Enum.KeyCode.W then moveDirection = moveDirection - Vector3.new(0,0,-1) end
+        if key == Enum.KeyCode.S then moveDirection = moveDirection - Vector3.new(0,0,1) end
+        if key == Enum.KeyCode.A then moveDirection = moveDirection - Vector3.new(-1,0,0) end
+        if key == Enum.KeyCode.D then moveDirection = moveDirection - Vector3.new(1,0,0) end
+        if key == Enum.KeyCode.LeftShift then hold = false end
+    end
+end)
+
+-- Bay lên/xuống bằng chuột
+UserInputService.InputChanged:Connect(function(input)
+    if flying and input.UserInputType == Enum.UserInputType.MouseWheel then
+        local delta = input.Position.Z
+        speed = math.clamp(speed + delta * 2, 10, 200)
+    end
+end)
+
+-- Tăng tốc khi giữ Shift
+RunService.RenderStepped:Connect(function(dt)
+    if flying then
+        local cam = workspace.CurrentCamera
+        local forward = cam.CFrame.LookVector
+        local right = cam.CFrame.RightVector
+        local up = cam.CFrame.UpVector
+        
+        local currentSpeed = hold and speed * 2 or speed
+        
+        local vel = (forward * moveDirection.Z + right * moveDirection.X) * currentSpeed
+        -- Thêm điều khiển lên/xuống bằng Q/E
+        if UserInputService:IsKeyDown(Enum.KeyCode.Q) then
+            vel = vel + up * currentSpeed
+        elseif UserInputService:IsKeyDown(Enum.KeyCode.E) then
+            vel = vel - up * currentSpeed
+        end
+        
+        bv.Velocity = vel
+        bg.CFrame = cam.CFrame
+    end
+end)
+
+print("✅ Fly script ready! Nhấn SPACE để bật/tắt bay. Q/E lên/xuống, giữ SHIFT để tăng tốc.")
