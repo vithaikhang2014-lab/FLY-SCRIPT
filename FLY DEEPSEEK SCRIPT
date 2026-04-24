@@ -1,101 +1,203 @@
---[ FLY SCRIPT - SMOOTH & LITE ]--
-local plr = game.Players.LocalPlayer
-local chr = plr.Character or plr.CharacterAdded:Wait()
-local hum = chr:WaitForChild("Humanoid")
-local root = chr:WaitForChild("HumanoidRootPart")
+--[[
+    SMOOTH FLIGHT SCRIPT - Roblox
+    Tính năng:
+    - GUI nhỏ gọn, có thể kéo
+    - Bật/tắt bay với hiệu ứng mượt
+    - Thanh trượt chỉnh tốc độ bay (cập nhật realtime)
+    - Chuyển động cực kỳ mượt (SMOOTH) dựa trên BodyVelocity + thuật toán nội suy
+    - Tự động tắt bay khi nhân vật chết, respawn lại
+    - Hỗ trợ cả chạy, nhảy bình thường khi tắt bay
+]]
 
--- Tạo BodyVelocity để bay mượt
-local bv = Instance.new("BodyVelocity")
-bv.MaxForce = Vector3.new(1, 1, 1) * 1e5
-bv.P = 1e4
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
 
--- Tạo BodyGyro để giữ thăng bằng
-local bg = Instance.new("BodyGyro")
-bg.MaxTorque = Vector3.new(1, 1, 1) * 1e6
-bg.P = 1e5
-
--- Biến điều khiển
+-- Giá trị mặc định
 local flying = false
-local speed = 50
-local hold = false
+local flySpeed = 50  -- tốc độ (studs/s)
+local currentVelocity = Vector3.zero
+local bodyVelocity = nil
 
--- Hàm bật/tắt bay
-function setFly(state)
-    flying = state
-    if flying then
-        hum.PlatformStand = true
-        bv.Parent = root
-        bg.Parent = root
-    else
-        hum.PlatformStand = false
-        bv:Destroy()
-        bg:Destroy()
+-- ---- TẠO GUI ----
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "FlyGUI"
+screenGui.Parent = player:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+-- Main Frame (có thể kéo)
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 180, 0, 100)
+frame.Position = UDim2.new(0.5, -90, 0.8, 0)  -- góc dưới màn hình
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+frame.BackgroundTransparency = 0.15
+frame.BorderSizePixel = 1
+frame.BorderColor3 = Color3.fromRGB(80, 170, 255)
+frame.Active = true
+frame.Draggable = true
+frame.Parent = screenGui
+
+-- Tiêu đề
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 25)
+title.Position = UDim2.new(0, 0, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "✈️ SMOOTH FLY"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextScaled = true
+title.Font = Enum.Font.GothamBold
+title.Parent = frame
+
+-- Nút bật/tắt bay
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(0, 80, 0, 30)
+toggleButton.Position = UDim2.new(0.5, -40, 0.45, 0)
+toggleButton.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
+toggleButton.Text = "BAY OFF"
+toggleButton.TextColor3 = Color3.new(1,1,1)
+toggleButton.Font = Enum.Font.GothamBold
+toggleButton.TextScaled = true
+toggleButton.Parent = frame
+
+-- Thanh trượt tốc độ
+local speedSlider = Instance.new("TextBox")
+speedSlider.Size = UDim2.new(0, 160, 0, 25)
+speedSlider.Position = UDim2.new(0.5, -80, 0.8, 0)
+speedSlider.BackgroundColor3 = Color3.fromRGB(50,50,60)
+speedSlider.Text = "Tốc độ: 50"
+speedSlider.TextColor3 = Color3.new(1,1,1)
+speedSlider.Font = Enum.Font.Gotham
+speedSlider.TextScaled = true
+speedSlider.Parent = frame
+
+-- ---- HÀM RESET KHI RESPAWN ----
+local function resetFly()
+    if bodyVelocity then
+        bodyVelocity:Destroy()
+        bodyVelocity = nil
+    end
+    flying = false
+    toggleButton.Text = "BAY OFF"
+    toggleButton.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
+    if humanoid then
+        humanoid.PlatformStand = false
     end
 end
 
--- Điều khiển bằng chuột + WASD
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-
-local moveDirection = Vector3.new(0,0,0)
-
-UserInputService.InputBegan:Connect(function(input, processed)
-    if processed then return end
-    if input.KeyCode == Enum.KeyCode.Space and not flying then
-        setFly(true)
-    elseif input.KeyCode == Enum.KeyCode.Space and flying then
-        setFly(false)
-    end
-    if flying then
-        local key = input.KeyCode
-        if key == Enum.KeyCode.W then moveDirection = moveDirection + Vector3.new(0,0,-1) end
-        if key == Enum.KeyCode.S then moveDirection = moveDirection + Vector3.new(0,0,1) end
-        if key == Enum.KeyCode.A then moveDirection = moveDirection + Vector3.new(-1,0,0) end
-        if key == Enum.KeyCode.D then moveDirection = moveDirection + Vector3.new(1,0,0) end
-        if key == Enum.KeyCode.LeftShift then hold = true end
-    end
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    resetFly()
 end)
 
-UserInputService.InputEnded:Connect(function(input)
-    if flying then
-        local key = input.KeyCode
-        if key == Enum.KeyCode.W then moveDirection = moveDirection - Vector3.new(0,0,-1) end
-        if key == Enum.KeyCode.S then moveDirection = moveDirection - Vector3.new(0,0,1) end
-        if key == Enum.KeyCode.A then moveDirection = moveDirection - Vector3.new(-1,0,0) end
-        if key == Enum.KeyCode.D then moveDirection = moveDirection - Vector3.new(1,0,0) end
-        if key == Enum.KeyCode.LeftShift then hold = false end
-    end
-end)
+-- ---- TẠO BODYVELOCITY MƯỢT ----
+local function enableFly()
+    if bodyVelocity then bodyVelocity:Destroy() end
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bodyVelocity.P = 9e5  -- độ cứng, giúp phản hồi nhanh nhưng mượt
+    bodyVelocity.Parent = rootPart
+    
+    humanoid.PlatformStand = true  -- bỏ ảnh hưởng trọng lực + điều khiển mặc định
+    flying = true
+    toggleButton.Text = "BAY ON"
+    toggleButton.BackgroundColor3 = Color3.fromRGB(200, 70, 70)
+end
 
--- Bay lên/xuống bằng chuột
-UserInputService.InputChanged:Connect(function(input)
-    if flying and input.UserInputType == Enum.UserInputType.MouseWheel then
-        local delta = input.Position.Z
-        speed = math.clamp(speed + delta * 2, 10, 200)
+local function disableFly()
+    if bodyVelocity then
+        bodyVelocity:Destroy()
+        bodyVelocity = nil
     end
-end)
+    humanoid.PlatformStand = false
+    flying = false
+    toggleButton.Text = "BAY OFF"
+    toggleButton.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
+end
 
--- Tăng tốc khi giữ Shift
-RunService.RenderStepped:Connect(function(dt)
-    if flying then
-        local cam = workspace.CurrentCamera
-        local forward = cam.CFrame.LookVector
-        local right = cam.CFrame.RightVector
-        local up = cam.CFrame.UpVector
+-- ---- CẬP NHẬT VELOCITY CỰC MƯỢT (chạy mỗi frame) ----
+RunService.RenderStepped:Connect(function(deltaTime)
+    if not flying or not character or not rootPart or not humanoid then return end
+    if humanoid.Health <= 0 then
+        disableFly()
+        return
+    end
+    
+    -- Lấy hướng di chuyển từ WASD
+    local moveDirection = humanoid.MoveDirection
+    if moveDirection.Magnitude > 0 then
+        -- Bay theo hướng nhìn của camera và hướng di chuyển của người chơi
+        local camera = workspace.CurrentCamera
+        local cameraCF = camera.CFrame
+        local forwardDirection = cameraCF.LookVector
+        local rightDirection = cameraCF.RightVector
         
-        local currentSpeed = hold and speed * 2 or speed
+        -- Chuyển moveDirection (X=trái/phải, Z=tới/lùi) sang không gian thế giới
+        local worldMove = (forwardDirection * moveDirection.Z) + (rightDirection * moveDirection.X)
+        worldMove = worldMove.Unit  -- chuẩn hóa
         
-        local vel = (forward * moveDirection.Z + right * moveDirection.X) * currentSpeed
-        -- Thêm điều khiển lên/xuống bằng Q/E
-        if UserInputService:IsKeyDown(Enum.KeyCode.Q) then
-            vel = vel + up * currentSpeed
-        elseif UserInputService:IsKeyDown(Enum.KeyCode.E) then
-            vel = vel - up * currentSpeed
-        end
-        
-        bv.Velocity = vel
-        bg.CFrame = cam.CFrame
+        currentVelocity = worldMove * flySpeed
+    else
+        -- Giảm dần vận tốc khi không bấm phím (tạo cảm giác lướt mượt)
+        currentVelocity = currentVelocity:Lerp(Vector3.zero, 0.25)
+    end
+    
+    -- Ap dụng velocity mượt (BodyVelocity tự động nội suy)
+    bodyVelocity.Velocity = currentVelocity
+end)
+
+-- ---- THAY ĐỔI TỐC ĐỘ QUA TEXTBOX ----
+speedSlider.FocusLost:Connect(function(enterPressed)
+    local num = tonumber(speedSlider.Text:match("[%d.]+"))
+    if num then
+        flySpeed = math.clamp(num, 10, 250)
+        speedSlider.Text = "Tốc độ: " .. math.floor(flySpeed)
+    else
+        speedSlider.Text = "Tốc độ: " .. math.floor(flySpeed)
     end
 end)
 
-print("✅ Fly script ready! Nhấn SPACE để bật/tắt bay. Q/E lên/xuống, giữ SHIFT để tăng tốc.")
+-- ---- NÚT BẬT/TẮT BAY ----
+toggleButton.MouseButton1Click:Connect(function()
+    if flying then
+        disableFly()
+    else
+        enableFly()
+    end
+end)
+
+-- ---- TỰ ĐỘNG TẮT KHI CHẾT ----
+humanoid.Died:Connect(function()
+    disableFly()
+end)
+
+-- ---- HIỆU ỨNG THÔNG BÁO NHẸ (tuỳ chọn) ----
+local function notify(msg)
+    local notif = Instance.new("TextLabel")
+    notif.Parent = screenGui
+    notif.Size = UDim2.new(0, 200, 0, 30)
+    notif.Position = UDim2.new(0.5, -100, 0.85, 0)
+    notif.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    notif.BackgroundTransparency = 0.3
+    notif.Text = msg
+    notif.TextColor3 = Color3.new(1,1,1)
+    notif.Font = Enum.Font.Gotham
+    notif.TextScaled = true
+    game:GetService("Debris"):AddItem(notif, 1.5)
+end
+
+-- Tuỳ chọn: show thông báo khi thay đổi tốc độ
+speedSlider.FocusLost:Connect(function()
+    notify("⚡ Tốc độ: " .. math.floor(flySpeed))
+end)
+
+-- Khởi tạo giá trị ban đầu
+speedSlider.Text = "Tốc độ: 50"
+flySpeed = 50
+
+print("✅ Script Smooth Bay đã tải! Kéo GUI để di chuyển, bật bay và tận hưởng chuyến bay siêu mượt.")
